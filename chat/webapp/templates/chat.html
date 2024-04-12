@@ -43,6 +43,7 @@ are permitted provided that the original author is acknowledged. See JavaScript 
 // Global variables
 let lastMessageId = 0;
 let peer_id = -1;
+let my_id = -1;
 const myID = {{ sender_id }};
 let userInfo = {};
 
@@ -102,42 +103,7 @@ function populateUsers(users) {
     });
 }
 
-// Fetch users from server
-$(document).ready(async function() {
-    fetch('/users')
-        .then(response => response.json())
-        .then(data => {
-            data.users.forEach(user => {
-                userInfo[user[0]] = user[1]; // Map user_id to username
-                
-                if (user[2] == "" || user[2] == null) {       // Check existence of ECDH key
-                    ProcessECDHKey();
-                }
-                else if (!sessionStorage.getItem("SessionKey") || sessionStorage.getItem("SessionKey") == "") {
-                    ProcessECDHKey();
-                }
-            });
-            console.log(userInfo);
-            populateUsers(data.users);
-        })
-        .catch(error => console.error('Error fetching user info:', error));
-});
 
-
-
-
-// Handle user selection change
-document.getElementById('userList').addEventListener('change', async(event) => {
-    let shareSecret;
-    peer_id = parseInt(event.target.value, 10); // Convert selected peer_id to integer
-    clearChatBox();
-    lastMessageId = 0;
-    fetchMessages(); // Fetch messages for the new selection
-    shareSecret = await retrieve_ECDH_PublicKey();      // 3 hours on async/await, fuck me
-    
-
-
-});
 
 // Clear chat box
 function clearChatBox() {
@@ -211,6 +177,45 @@ function eraseChat() {
 
 
 
+
+
+// Fetch users from server
+$(document).ready(async () => {
+    fetch('/users')
+        .then(response => response.json())
+        .then(async(data) => {
+            data.users.forEach(async(user) => {
+                my_id = user[0];
+                userInfo[user[0]] = user[1]; // Map user_id to username
+                
+                if (user[2] == "" || user[2] == null) {       // Check existence of ECDH key
+                    await ProcessECDHKey();
+                }
+                else if (!sessionStorage.getItem("session_key") || sessionStorage.getItem("session_key") == "") {
+                    await ProcessECDHKey();
+                }
+            });
+            console.log(userInfo);
+            
+            populateUsers(data.users);
+        })
+        .catch(error => console.error('Error fetching user info:', error));
+});
+
+
+
+
+// Handle user selection change
+document.getElementById('userList').addEventListener('change', async(event) => {
+    let shareSecret;
+    peer_id = parseInt(event.target.value, 10); // Convert selected peer_id to integer
+    clearChatBox();
+    lastMessageId = 0;
+    fetchMessages(); // Fetch messages for the new selection
+    retrieve_ECDH_PublicKey();      // 3 hours on async/await, fuck me
+});
+
+
 //////////////////////////////////////////////////////////////////////////////
 
 
@@ -218,12 +223,19 @@ function eraseChat() {
 // https://www.youtube.com/watch?v=DXv1boalsDI
 // https://developers.neo.org/tutorials/2022/10/25/neons-as-a-public-key-server
 
+// How to access mysql in a docker environment
+// https://stackoverflow.com/questions/48105051/docker-how-to-take-a-look-at-the-tables-inside-mysql-volume
+
 
 // Part 1 - ECDH
+
 async function ProcessECDHKey() {
+
+    let password_CryptoKey = await retrieve_user_password();
+
     let KeyPair = await window.crypto.subtle.generateKey({name: "ECDH",namedCurve: "P-384",}, true, ["deriveKey", "deriveBits"]);
-    let PublicKey = await window.crypto.subtle.exportKey("jwk", KeyPair.publicKey)
-    let PrivateKey = await window.crypto.subtle.exportKey("jwk", KeyPair.privateKey)
+    let PublicKey = await window.crypto.subtle.wrapKey("jwk", KeyPair.publicKey, password_CryptoKey, {name: "AES-KW"});
+    let PrivateKey = await window.crypto.subtle.wrapKey("jwk", KeyPair.privateKey, password_CryptoKey, {name: "AES-KW"})
 
     const payload = {
         type: "ECDH",
@@ -260,12 +272,21 @@ async function retrieve_ECDH_PublicKey() {
     let publicKey;
     if (peer_id === -1) return;                       // Exit if selected "Choose a contact" 
     try {
-        const response = await fetch(`/retrieve_ECDH_PublicKey?user_id=${peer_id}`)
+        const response = await fetch(`/retrieve_ECDH_PublicKey?user_id=${peer_id}`);
         const resp = await response.json();
-        let publicKey = JSON.parse(resp.session_key[0]);
-        let shareSecret = await deriveSharedSecretKey(publicKey);   
 
-        return shareSecret;
+        let password_CryptoKey = await retrieve_user_password();
+        password_CryptoKey = await window.crypto.subtle.importKey("jwk", password_CryptoKey, {name: "HMAC", hash: "SHA-256"}, false, ["wrapKey", "unwrapKey"]);
+
+        let peer_publicKey = JSON.parse(resp.session_key[0]);
+        peer_publicKey = await window.crypto.subtle.unwrapKey("jwk", peer_publicKey, password_CryptoKey, {name: "AES-KW"}, {name: "HMAC", hash: "SHA-256"},  false, ["deriveBits"]);
+        let shareSecret = await deriveSharedSecretKey(peer_publicKey);
+
+        shareSecret = await window.crypto.subtle.wrapKey("jwk", KeyPair.shareSecret, password_CryptoKey, {name: "AES-KW"});
+
+
+        localStorage.setItem("shared_secret", JSON.stringify(shareSecret));
+        
     }
 
     catch(error) {console.error('Error fetching public key:', error)};
@@ -277,14 +298,39 @@ async function retrieve_ECDH_PublicKey() {
 async function deriveSharedSecretKey(publicKey) {
     // let publicKey = retrieve_ECDH_PublicKey();
     let privateKey = JSON.parse(localStorage.getItem("session_key"));
+    
+    let password_CryptoKey = await retrieve_user_password();
+    password_CryptoKey = await window.crypto.subtle.importKey("jwk", password_CryptoKey, {name: "HMAC", hash: "SHA-256"}, false, ["wrapKey", "unwrapKey"]);
 
-    let Imported_PrivateKey = await window.crypto.subtle.importKey("jwk", privateKey, {name: "ECDH", namedCurve: "P-384",}, false, ["deriveKey", "deriveBits"]);
+    privateKey = await window.crypto.subtle.unwrapKey("jwk", privateKey, password_CryptoKey, {name: "AES-KW"}, {name: "HMAC", hash: "SHA-256"}, false, ["deriveBits"]);
+
+    let Imported_PrivateKey = await window.crypto.subtle.importKey("jwk", privateKey, {name: "ECDH", namedCurve: "P-384",}, false, ["deriveBits"]);
     let Imported_PublicKey = await window.crypto.subtle.importKey("jwk", publicKey, {name: "ECDH", namedCurve: "P-384",}, false, []);
     let SharedSecret = await window.crypto.subtle.deriveBits({name: "ECDH", public: Imported_PublicKey}, Imported_PrivateKey, 128);
     
     SharedSecret = bytesToHexString(SharedSecret);
-    return SharedSecret;
+    SharedSecret = await window.crypto.subtle.unwrapKey("jwk", SharedSecret, password_CryptoKey, {name: "AES-KW"}, {name: "HMAC", hash: "SHA-256"}, false, ["deriveBits"]);
+
+    return shareSecret;
 }
+
+
+async function retrieve_user_password() {
+    try {
+        const response = await fetch(`/retrieve_user_password?user_id=${my_id}`);
+        const resp = await response.json();
+        let password = resp.password[0];
+
+        password = new TextEncoder().encode(password);  // convert string to Uint8Array
+        password = await window.crypto.subtle.importKey("raw", password, {name: "HMAC", hash: {name: "SHA-512"}}, true, ["deriveBits", "deriveKey"]);
+        password = await windwo.crypto.subtle.deriveKey({})
+    }
+
+    catch (error) {
+        console.log(error);
+    }
+}
+
 
 
 
@@ -351,14 +397,14 @@ async function encrypt(SharedSecret, plainText) {
   return message;
 }
 
-function Create_HMAC_Key() {
+async function Create_HMAC_Key() {
     let HMAC = await window.crypto.subtle.generateKey({name: "HMAC", hash: "SHA-256"}, true, ["sign", "verify"]);
     
 
     
 }
 
-
+// https://security.stackexchange.com/questions/257828/key-management-for-end-to-end-encryption-for-chat-application
 
 </script>
 </body>

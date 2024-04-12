@@ -168,6 +168,25 @@ def logout():
 
 
 ###########################################################################
+@app.route('/retrieve_user_password', methods=['GET'])
+def retrieve_user_password():
+# To encrypt ECDH private key and AES private key with user password 
+    if 'user_id' not in session:
+        abort(403)
+
+    user_id = request.args.get('user_id')             # get user_id
+    cur = mysql.connection.cursor()
+    cur.execute("SELECT password FROM users WHERE user_id = %s", (user_id))
+    user_password = cur.fetchone()
+    cur.close()
+
+    return jsonify({"password": user_password}), 200
+
+
+
+
+
+
 @app.route('/ProcessECDHKey', methods=['POST'])
 def ProcessECDHKey():
     if not request.json or not 'key' in request.json:
@@ -203,6 +222,9 @@ def retrieve_ECDH_PublicKey():
     cur.close()
 
     return jsonify({"session_key": ECDH_PublicKey}), 200
+
+
+
 
 
 
