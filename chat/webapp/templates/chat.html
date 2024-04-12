@@ -216,8 +216,10 @@ function eraseChat() {
 
 // How the fuck can I do key exchange when Alice or Bob is offline?
 // https://www.youtube.com/watch?v=DXv1boalsDI
+// https://developers.neo.org/tutorials/2022/10/25/neons-as-a-public-key-server
 
 
+// Part 1 - ECDH
 async function ProcessECDHKey() {
     let KeyPair = await window.crypto.subtle.generateKey({name: "ECDH",namedCurve: "P-384",}, true, ["deriveKey", "deriveBits"]);
     let PublicKey = await window.crypto.subtle.exportKey("jwk", KeyPair.publicKey)
@@ -308,18 +310,53 @@ function bytesToHexString(bytes) {
 
 
 
-function CreateSalt(length) {
-    // Create {length} size of random value (salt) 
-    arr = window.crypto.getRandomValues(Uint8Array(length));
-    return Array.from(arr, dec2hex).join('');
+/////////////////////////////////////////////////////////////////////////////////////////////
+// Part 2 - AES + MAC
+async function Get_AES_GCM_Key(SharedSecret, sender_name, receiver_name) {
+    return window.crypto.subtle.deriveKey(
+    {
+      name: "HKDF",
+      salt: window.crypto.getRandomValues(new Uint8Array(16)),
+      info: new Uint8Array(`CHAT_KEY_${sender_name}_TO_${receiver_name}`),
+      hash: "SHA-256",
+    },
+
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"],
+  );
 }
 
-function dec2hex (dec) {
-  return dec.toString(16).padStart(2, "0")
+
+
+
+
+async function encrypt(SharedSecret, plainText) {
+  const message = {
+    iv: window.crypto.getRandomValues(new Uint8Array(12)),
+  };
+
+  const key = await getKey(SharedSecret);
+
+  message.ciphertext = await window.crypto.subtle.encrypt(
+    {
+      name: "AES-GCM",
+      iv: message.iv,
+    },
+    key,
+    plainText,
+  );
+
+  return message;
 }
 
+function Create_HMAC_Key() {
+    let HMAC = await window.crypto.subtle.generateKey({name: "HMAC", hash: "SHA-256"}, true, ["sign", "verify"]);
+    
 
-
+    
+}
 
 
 
