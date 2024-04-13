@@ -231,11 +231,9 @@ document.getElementById('userList').addEventListener('change', async(event) => {
 
 async function ProcessECDHKey() {
 
-    let password_CryptoKey = await retrieve_user_password();
-
     let KeyPair = await window.crypto.subtle.generateKey({name: "ECDH",namedCurve: "P-384",}, true, ["deriveKey", "deriveBits"]);
-    let PublicKey = await window.crypto.subtle.wrapKey("jwk", KeyPair.publicKey, password_CryptoKey, {name: "AES-KW"});
-    let PrivateKey = await window.crypto.subtle.wrapKey("jwk", KeyPair.privateKey, password_CryptoKey, {name: "AES-KW"})
+    let PublicKey = await window.crypto.subtle.exportKey("jwk", KeyPair.publicKey);
+    let PrivateKey = await window.crypto.subtle.exportKey("jwk", KeyPair.privateKey);
 
     const payload = {
         type: "ECDH",
@@ -274,18 +272,12 @@ async function retrieve_ECDH_PublicKey() {
     try {
         const response = await fetch(`/retrieve_ECDH_PublicKey?user_id=${peer_id}`);
         const resp = await response.json();
-
-        let password_CryptoKey = await retrieve_user_password();
-        password_CryptoKey = await window.crypto.subtle.importKey("jwk", password_CryptoKey, {name: "HMAC", hash: "SHA-256"}, false, ["wrapKey", "unwrapKey"]);
-
         let peer_publicKey = JSON.parse(resp.session_key[0]);
-        peer_publicKey = await window.crypto.subtle.unwrapKey("jwk", peer_publicKey, password_CryptoKey, {name: "AES-KW"}, {name: "HMAC", hash: "SHA-256"},  false, ["deriveBits"]);
-        let shareSecret = await deriveSharedSecretKey(peer_publicKey);
+        // peer_publicKey = await deriveSharedSecretKey(peer_publicKey);
+        // peer_publicKey = await window.crypto.subtle.importKey("jwk", peer_publicKey, {name: "ECDH", namedCurve: "P-384"}, false, ["deriveBits"]);
+        let SharedSecret = await deriveSharedSecretKey(peer_publicKey);
 
-        shareSecret = await window.crypto.subtle.wrapKey("jwk", KeyPair.shareSecret, password_CryptoKey, {name: "AES-KW"});
-
-
-        localStorage.setItem("shared_secret", JSON.stringify(shareSecret));
+        localStorage.setItem("shared_secret", JSON.stringify(SharedSecret));
         
     }
 
@@ -298,38 +290,33 @@ async function retrieve_ECDH_PublicKey() {
 async function deriveSharedSecretKey(publicKey) {
     // let publicKey = retrieve_ECDH_PublicKey();
     let privateKey = JSON.parse(localStorage.getItem("session_key"));
-    
-    let password_CryptoKey = await retrieve_user_password();
-    password_CryptoKey = await window.crypto.subtle.importKey("jwk", password_CryptoKey, {name: "HMAC", hash: "SHA-256"}, false, ["wrapKey", "unwrapKey"]);
+    // privateKey = await window.crypto.subtle.importKey("jwk", privateKey, {name: "ECDH", namedCurve: "P-384"}, false, ["deriveBits"]);
 
-    privateKey = await window.crypto.subtle.unwrapKey("jwk", privateKey, password_CryptoKey, {name: "AES-KW"}, {name: "HMAC", hash: "SHA-256"}, false, ["deriveBits"]);
-
-    let Imported_PrivateKey = await window.crypto.subtle.importKey("jwk", privateKey, {name: "ECDH", namedCurve: "P-384",}, false, ["deriveBits"]);
-    let Imported_PublicKey = await window.crypto.subtle.importKey("jwk", publicKey, {name: "ECDH", namedCurve: "P-384",}, false, []);
+    let Imported_PrivateKey = await window.crypto.subtle.importKey("jwk", privateKey, {name: "ECDH", namedCurve: "P-384"}, false, ["deriveBits"]);
+    let Imported_PublicKey = await window.crypto.subtle.importKey("jwk", publicKey, {name: "ECDH", namedCurve: "P-384"}, false, []);
     let SharedSecret = await window.crypto.subtle.deriveBits({name: "ECDH", public: Imported_PublicKey}, Imported_PrivateKey, 128);
     
     SharedSecret = bytesToHexString(SharedSecret);
-    SharedSecret = await window.crypto.subtle.unwrapKey("jwk", SharedSecret, password_CryptoKey, {name: "AES-KW"}, {name: "HMAC", hash: "SHA-256"}, false, ["deriveBits"]);
 
-    return shareSecret;
+    return SharedSecret;
 }
 
 
-async function retrieve_user_password() {
-    try {
-        const response = await fetch(`/retrieve_user_password?user_id=${my_id}`);
-        const resp = await response.json();
-        let password = resp.password[0];
+// async function retrieve_user_password() {
+//     try {
+//         const response = await fetch(`/retrieve_user_password?user_id=${my_id}`);
+//         const resp = await response.json();
+//         let password = resp.password[0];
 
-        password = new TextEncoder().encode(password);  // convert string to Uint8Array
-        password = await window.crypto.subtle.importKey("raw", password, {name: "HMAC", hash: {name: "SHA-512"}}, true, ["deriveBits", "deriveKey"]);
-        password = await windwo.crypto.subtle.deriveKey({})
-    }
+//         password = new TextEncoder().encode(password);  // convert string to Uint8Array
+//         password = await window.crypto.subtle.importKey("raw", password, {name: "HMAC", hash: {name: "SHA-512"}}, true, ["deriveBits", "deriveKey"]);
+//         password = await windwo.crypto.subtle.deriveKey({})
+//     }
 
-    catch (error) {
-        console.log(error);
-    }
-}
+//     catch (error) {
+//         console.log(error);
+//     }
+// }
 
 
 
