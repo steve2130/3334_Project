@@ -41,7 +41,7 @@ are permitted provided that the original author is acknowledged. See JavaScript 
 <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha384-1H217gwSVyLSIfaLxHbE7dRb3v4mYCKbpQvzx0cegeju1MVsGrX5xXxAvs/HgeFs" crossorigin="anonymous"></script>
 <script type="text/javascript">
 // Global variables
-let lastMessageId = 0;
+let lastMessageId = 1;
 let peer_id = -1;
 let my_id = -1;
 const myID = {{ sender_id }};
@@ -141,17 +141,16 @@ async function fetchMessages() {
     // let HMAC_Key_Depart = JSON.parse(localStorage.getItem("HMAC_Key_Depart"));
     // let AES_GCM_Key_Depart = JSON.parse(localStorage.getItem("AES_GCM_Key_Depart"));
     // if (lastMessageId === 0) return;
-    let key_info = await retrieve_AES_and_HMAC_Key(lastMessageId);
+    
     // let HMAC_key_id = key_info.key_id;
     // let HMAC_Key_Depart = key_info.key_content;
 
-    
-    // key_info = await retrieve_AES_and_HMAC_Key(lastMessageId);
-    let AES_GCM_key_id = key_info.key_id;
-    let AES_GCM_Key_Depart = key_content.key_content;
+    let key_stuff = await retrieve_AES_and_HMAC_Key(lastMessageId);
+    let AES_GCM_key_id = key_stuff.key_id;
+    let AES_GCM_Key_Depart = key_stuff.key_content;
 
-    AES_GCM_Key_Depart = await window.crypto.subtle.importKey("jwk", HMAC_Key_Depart, {name:"AES-GCM"}, false, ["decrypt"]);
-    HMAC_Key_Depart = await window.crypto.subtle.importKey("jwk", HMAC_Key_Depart, {name:"HMAC", hash: "SHA-256"}, false, ["verify"]);
+    //AES_GCM_Key_Depart = await window.crypto.subtle.importKey("jwk", HMAC_Key_Depart, {name:"AES-GCM"}, false, ["decrypt"]);
+    //HMAC_Key_Depart = await window.crypto.subtle.importKey("jwk", HMAC_Key_Depart, {name:"HMAC", hash: "SHA-256"}, false, ["verify"]);
 
 
 
@@ -252,7 +251,7 @@ document.getElementById('userList').addEventListener('change', async(event) => {
     let shareSecret;
     peer_id = parseInt(event.target.value, 10); // Convert selected peer_id to integer
     clearChatBox();
-    lastMessageId = 0;
+    lastMessageId = 1;
     fetchMessages(); // Fetch messages for the new selection
 
 
@@ -574,14 +573,14 @@ async function decrypt_messages(cryptoKey, cipherText, iv, additionalData) {
 
 
 
-async function retrieve_AES_and_HMAC_Key(message_id, key_type) {
+async function retrieve_AES_and_HMAC_Key(message_id) {
     fetch(`/retrieve_AES_and_HMAC_Key?message_id=${message_id}`)
         .then(response => response.json())
-            .then(data => {
-                data.key_info.forEach(key_info => {
-                    return {key_id: key_info.key_id, key_content: key_info.key_content};
-                })
+        .then(async(data) => {
+                let key_stuff = await data.Key_Info;
             })
+
+    return key_stuff;
 }
 
 

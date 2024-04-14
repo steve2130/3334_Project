@@ -262,21 +262,34 @@ def retrieve_AES_and_HMAC_Key():
     if 'user_id' not in session:
         abort(403)
 
-    message_id = request.args.get('message_id', type=int)
+    message_id = request.args.get('message_id', type=str)
 
     cur = mysql.connection.cursor()
-    cur.execute("SELECT key_id, iv, additionalData FROM messages WHERE message_id = %s", (message_id))
-    Key_Info = cur.fetchone()
-    Key_Info = jsonify(Key_Info)
+    cur.execute("SELECT key_id, iv, additionalData, message_text FROM messages WHERE message_id = %s", (message_id))
+    column_names = [desc[0] for desc in cur.description]
+    row = cur.fetchone()
+    Key_Info = dict(zip(column_names, row))
     
-    cur.execute("SELECT key_content, sender_id, receiver_id FROM messages WHERE key_id = %s", (Key_Info.key_id))
-    Key_Content = cur.fetchone()
+    print(Key_Info)
+    print(Key_Info["key_id"])
+    cur.close()
+    key_id = str(Key_Info["key_id"])
+
+    cur = mysql.connection.cursor()
+    cur.execute("SELECT key_content, sender_id, receiver_id FROM ENCRYPTIONKEY WHERE key_id = (%s)", [key_id,])
+    column_names = [desc[0] for desc in cur.description]
+    row = cur.fetchone()
+    Key_Content = dict(zip(column_names, row))
+
+    print(Key_Content)
     
-    Key_Info = Key_Info + Key_Content
+    Key_Info = Key_Info | Key_Content
     
+    
+    print(Key_Info)
     cur.close()
     
-    return jsonify({"key_info": Key_Info}), 200
+    return jsonify({"Key_Info": Key_Info})
     
     
     
