@@ -41,7 +41,7 @@ are permitted provided that the original author is acknowledged. See JavaScript 
 <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha384-1H217gwSVyLSIfaLxHbE7dRb3v4mYCKbpQvzx0cegeju1MVsGrX5xXxAvs/HgeFs" crossorigin="anonymous"></script>
 <script type="text/javascript">
 // Global variables
-let lastMessageId = 1;
+let lastMessageId = 0;
 let peer_id = -1;
 let my_id = -1;
 const myID = {{ sender_id }};
@@ -145,44 +145,56 @@ async function fetchMessages() {
     // let HMAC_key_id = key_info.key_id;
     // let HMAC_Key_Depart = key_info.key_content;
 
-    let key_stuff = await retrieve_AES_and_HMAC_Key(lastMessageId);
-    let AES_GCM_key_id = key_stuff.key_id;
-    let AES_GCM_Key_Depart = key_stuff.key_content;
+    //AES_GCM_Key_Depart = JSON.stringify(AES_GCM_Key_Depart);
+    // AES_GCM_Key_Depart = AES_GCM_Key_Depart);
+    //AES_GCM_Key_Depart = JSON.parse(AES_GCM_Key_Depart);
 
-    //AES_GCM_Key_Depart = await window.crypto.subtle.importKey("jwk", HMAC_Key_Depart, {name:"AES-GCM"}, false, ["decrypt"]);
-    //HMAC_Key_Depart = await window.crypto.subtle.importKey("jwk", HMAC_Key_Depart, {name:"HMAC", hash: "SHA-256"}, false, ["verify"]);
-
-
+    // HMAC_Key_Depart = await window.crypto.subtle.importKey("jwk", HMAC_Key_Depart, {name:"HMAC", hash: "SHA-256"}, false, ["verify"]);
 
 
     fetch(`/fetch_messages?last_message_id=${lastMessageId}&peer_id=${peer_id}`)
         .then(response => response.json())
-        .then(data => {
-            data.messages.forEach(async(message) => {
+        .then(async(data) => {
+            for(let message of data.messages) {
 
-                let decrypted_messages = await decrypt_messages(AES_GCM_Key_Depart, message.message_text, message.iv, message.additionalData);
-                displayMessage(decrypted_messages);
+                retrieve_AES_and_HMAC_Key(message.message_id);
+                let key_stuff = JSON.parse(localStorage.getItem(`key_stuff${message.message_id}`));
+                let AES_GCM_key_id = key_stuff.key_id;
+                let AES_GCM_Key_Depart = key_stuff.key_content.replace(/\s+/g,'').replace('"alg":"A256GCM","ext":True', '"alg":"A256GCM","ext":true');  // remove white spaces and fucking replace "True" with "true". This fucking stupid shit wasted me a couple of hours. Seems JSON.stringify automatically changes it to upper case wtf?
+                AES_GCM_Key_Depart = JSON.parse(AES_GCM_Key_Depart);
+
+
+                AES_GCM_Key_Depart = await window.crypto.subtle.importKey("jwk", AES_GCM_Key_Depart, {name:"AES-GCM"}, false, ["decrypt"]);
+                cipherText = new TextEncoder().encode(message.message_text);
+                iv = new TextEncoder().encode(key_stuff.iv);
+
+
+                
+                additionalData = new TextEncoder().encode(key_stuff.additionalData);
+
+                let decrypted_messages = await decrypt_messages(AES_GCM_Key_Depart, cipherText, iv, additionalData);
+                displayMessage(decrypted_messages, key_stuff.sender_id, key_stuff.receiver_id);
                 lastMessageId = message.message_id;
-            });
+            };
         })
         .catch(error => console.error('Error fetching messages:', error));
 }
 
 // Periodically fetch new messages every second
-setInterval(fetchMessages, 1000);
+// setInterval(fetchMessages, 3000);
 
 
 
 // Display a single message
-function displayMessage(message) {
+function displayMessage(message, sender_id, receiver_id) {
     const messagesContainer = document.getElementById('messages');
     const messageElement = document.createElement('div');
 
     // Determine sender and receiver strings
-    const sender = message.sender_id == myID ? "me" : (userInfo[message.sender_id] || `User ${message.sender_id}`);
-    const receiver = message.receiver_id == myID ? "me" : (userInfo[message.receiver_id] || `User ${message.receiver_id}`);
+    const sender = sender_id == myID ? "me" : (userInfo[sender_id] || `User ${sender_id}`);
+    const receiver = receiver_id == myID ? "me" : (userInfo[receiver_id] || `User ${receiver_id}`);
 
-    messageElement.textContent = `From ${sender} to ${receiver}: ${message.message_text}`;
+    messageElement.textContent = `From ${sender} to ${receiver}: ${message}`;
     messagesContainer.appendChild(messageElement);
 }
 
@@ -248,10 +260,11 @@ $(document).ready(async () => {
 
 // Handle user selection change
 document.getElementById('userList').addEventListener('change', async(event) => {
+    localStorage.removeItem("key_stuff");
     let shareSecret;
     peer_id = parseInt(event.target.value, 10); // Convert selected peer_id to integer
     clearChatBox();
-    lastMessageId = 1;
+    lastMessageId = 0;
     fetchMessages(); // Fetch messages for the new selection
 
 
@@ -488,10 +501,10 @@ async function Make_AES_and_HMAC_Keys(SharedSecret, message) {
     let HMAC_Key_Depart = await Derive_HMAC_Key(sharedDK, salt, my_id, peer_id);
     let HMAC_Key_Arrive = await Derive_HMAC_Key(sharedDK, salt, peer_id, my_id);
 
-    AES_GCM_Key_Depart_Export = await window.crypto.subtle.exportKey("jwk", AES_GCM_Key_Depart);
-    HMAC_Key_Depart_Export = await window.crypto.subtle.exportKey("jwk", HMAC_Key_Depart);
-    localStorage.setItem("AES_GCM_Key_Depart", JSON.stringify(AES_GCM_Key_Depart_Export));
-    localStorage.setItem("HMAC_Key_Depart", JSON.stringify(HMAC_Key_Depart_Export));
+    AES_GCM_Key_Depart_Export = JSON.stringify(await window.crypto.subtle.exportKey("jwk", AES_GCM_Key_Depart));
+    HMAC_Key_Depart_Export = JSON.stringify(await window.crypto.subtle.exportKey("jwk", HMAC_Key_Depart));
+    localStorage.setItem("AES_GCM_Key_Depart", AES_GCM_Key_Depart_Export);
+    localStorage.setItem("HMAC_Key_Depart", HMAC_Key_Depart_Export);
 
 
 
@@ -502,7 +515,10 @@ async function Make_AES_and_HMAC_Keys(SharedSecret, message) {
     let additionalData = new TextEncoder().encode(`CHAT_MSG_USER${my_id}_TO_${peer_id}`);
 
     let encrypted_messages = bytesToHexString(await encrypt_messages(message, AES_GCM_Key_Depart, iv, additionalData));
-    iv = await window.crypto.subtle.sign("HMAC", HMAC_Key_Depart, iv);
+    
+    
+    // IV!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    // iv = await window.crypto.subtle.sign("HMAC", HMAC_Key_Depart, iv);
 
     Send_Keys_To_Backend("AES-GCM", AES_GCM_Key_Depart_Export, my_id, peer_id);
     //Send_Keys_To_Backend("AES-GCM", AES_GCM_Key_Depart, peer_id, my_id);
@@ -559,16 +575,25 @@ function Send_Keys_To_Backend(key_type, key_content, sender_id, receiver_id) {
 
 
 async function decrypt_messages(cryptoKey, cipherText, iv, additionalData) {
-    return await window.crypto.subtle.decrypt(
+    try {
+        let plaintext = await window.crypto.subtle.decrypt(
         {
             name: "AES-GCM",
-            iv: iv, 
-            additionalData, additionalData,
-            tagLength: 128
+            iv: iv,
+            additionalData: additionalData,
+            tagLength: 128,
         },
-        cryptoKey,
-        cipherText
-    );
+            cryptoKey,
+            cipherText,
+        );
+
+        return plaintext;
+    }
+    
+    catch(error) {
+        console.log(error);
+    }
+
 }
 
 
@@ -576,11 +601,11 @@ async function decrypt_messages(cryptoKey, cipherText, iv, additionalData) {
 async function retrieve_AES_and_HMAC_Key(message_id) {
     fetch(`/retrieve_AES_and_HMAC_Key?message_id=${message_id}`)
         .then(response => response.json())
-        .then(async(data) => {
-                let key_stuff = await data.Key_Info;
-            })
+        .then(data => {
+                localStorage.setItem(`key_stuff${message_id}`, JSON.stringify(data.Key_Info));
+        })
 
-    return key_stuff;
+    
 }
 
 
