@@ -57,12 +57,31 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // Send message function
-function sendMessage() {
+async function sendMessage() {
     if (peer_id == -1) return; // Exit if no peer selected
-    const message = document.getElementById('messageInput').value;
+    let message = document.getElementById('messageInput').value;
+    message = new TextEncoder().encode(message);
+    // let SharedSecret = localStorage.getItem("shared_secret").slice(1, -1);
+    // SharedSecret = new Uint8Array(SharedSecret.match(/[\da-f]{2}/gi).map(function (h) {return parseInt(h, 16)}))
+    // SharedSecret = typedArrayToBuffer(SharedSecret);
+    // SharedSecret = await window.crypto.subtle.importKey("raw", SharedSecret, {name: "ECDH", namedCurve: "P-384"}, false, []);
+    let SharedSecret = await retrieve_ECDH_PublicKey();      // 3 hours on async/await, fuck me
+    let {encrypted_messages, iv, salt, additionalData, key_id} = await Make_AES_and_HMAC_Keys(SharedSecret, message);
+
+    // Convert ArrayBuffer to String
+    iv = bytesToHexString(iv);
+    salt = bytesToHexString(salt);
+    additionalData = bytesToHexString(additionalData);
+
+
+    // Create message payload
     const payload = {
         receiver_id: peer_id,
-        message_text: message,
+        message_text: encrypted_messages,
+        iv: iv,
+        salt: salt,
+        additionalData: additionalData,
+        key_id: key_id,
     };
 
     fetch('/send_message', {
@@ -70,6 +89,7 @@ function sendMessage() {
         headers: {
             'Content-Type': 'application/json',
         },
+
         body: JSON.stringify(payload),
     })
     .then(response => {
@@ -115,20 +135,42 @@ function clearChatBox() {
 
 
 // Fetch messages from server
-function fetchMessages() {
+async function fetchMessages() {
     if (peer_id === -1) return; // Exit if no peer selected
+
+    // let HMAC_Key_Depart = JSON.parse(localStorage.getItem("HMAC_Key_Depart"));
+    // let AES_GCM_Key_Depart = JSON.parse(localStorage.getItem("AES_GCM_Key_Depart"));
+    // if (lastMessageId === 0) return;
+    let key_info = await retrieve_AES_and_HMAC_Key(lastMessageId);
+    // let HMAC_key_id = key_info.key_id;
+    // let HMAC_Key_Depart = key_info.key_content;
+
+    
+    // key_info = await retrieve_AES_and_HMAC_Key(lastMessageId);
+    let AES_GCM_key_id = key_info.key_id;
+    let AES_GCM_Key_Depart = key_content.key_content;
+
+    AES_GCM_Key_Depart = await window.crypto.subtle.importKey("jwk", HMAC_Key_Depart, {name:"AES-GCM"}, false, ["decrypt"]);
+    HMAC_Key_Depart = await window.crypto.subtle.importKey("jwk", HMAC_Key_Depart, {name:"HMAC", hash: "SHA-256"}, false, ["verify"]);
+
+
+
+
     fetch(`/fetch_messages?last_message_id=${lastMessageId}&peer_id=${peer_id}`)
         .then(response => response.json())
         .then(data => {
-            data.messages.forEach(message => {
-                displayMessage(message);
+            data.messages.forEach(async(message) => {
+
+                let decrypted_messages = await decrypt_messages(AES_GCM_Key_Depart, message.message_text, message.iv, message.additionalData);
+                displayMessage(decrypted_messages);
                 lastMessageId = message.message_id;
             });
         })
         .catch(error => console.error('Error fetching messages:', error));
 }
 
-
+// Periodically fetch new messages every second
+setInterval(fetchMessages, 1000);
 
 
 
@@ -145,8 +187,7 @@ function displayMessage(message) {
     messagesContainer.appendChild(messageElement);
 }
 
-// Periodically fetch new messages every second
-setInterval(fetchMessages, 1000);
+
 
 // Erase Chat function using fetch API
 function eraseChat() {
@@ -184,8 +225,9 @@ $(document).ready(async () => {
     fetch('/users')
         .then(response => response.json())
         .then(async(data) => {
+            my_id = data.current_user;  // get Logined user id
+
             data.users.forEach(async(user) => {
-                my_id = user[0];
                 userInfo[user[0]] = user[1]; // Map user_id to username
                 
                 if (user[2] == "" || user[2] == null) {       // Check existence of ECDH key
@@ -212,7 +254,10 @@ document.getElementById('userList').addEventListener('change', async(event) => {
     clearChatBox();
     lastMessageId = 0;
     fetchMessages(); // Fetch messages for the new selection
-    retrieve_ECDH_PublicKey();      // 3 hours on async/await, fuck me
+
+
+
+
 });
 
 
@@ -231,7 +276,7 @@ document.getElementById('userList').addEventListener('change', async(event) => {
 
 async function ProcessECDHKey() {
 
-    let KeyPair = await window.crypto.subtle.generateKey({name: "ECDH",namedCurve: "P-384",}, true, ["deriveKey", "deriveBits"]);
+    let KeyPair = await window.crypto.subtle.generateKey({name: "ECDH",namedCurve: "P-384",}, true, ["deriveBits"]);
     let PublicKey = await window.crypto.subtle.exportKey("jwk", KeyPair.publicKey);
     let PrivateKey = await window.crypto.subtle.exportKey("jwk", KeyPair.privateKey);
 
@@ -277,8 +322,8 @@ async function retrieve_ECDH_PublicKey() {
         // peer_publicKey = await window.crypto.subtle.importKey("jwk", peer_publicKey, {name: "ECDH", namedCurve: "P-384"}, false, ["deriveBits"]);
         let SharedSecret = await deriveSharedSecretKey(peer_publicKey);
 
-        localStorage.setItem("shared_secret", JSON.stringify(SharedSecret));
-        
+        // localStorage.setItem("shared_secret", JSON.stringify(SharedSecret));
+        return SharedSecret;
     }
 
     catch(error) {console.error('Error fetching public key:', error)};
@@ -296,7 +341,7 @@ async function deriveSharedSecretKey(publicKey) {
     let Imported_PublicKey = await window.crypto.subtle.importKey("jwk", publicKey, {name: "ECDH", namedCurve: "P-384"}, false, []);
     let SharedSecret = await window.crypto.subtle.deriveBits({name: "ECDH", public: Imported_PublicKey}, Imported_PrivateKey, 128);
     
-    SharedSecret = bytesToHexString(SharedSecret);
+    // SharedSecret = bytesToHexString(SharedSecret);
 
     return SharedSecret;
 }
@@ -340,21 +385,24 @@ function bytesToHexString(bytes) {
 }
 
 
-
+// function typedArrayToBuffer(array) {
+//     return array.buffer.slice(array.byteOffset, array.byteLength + array.byteOffset)
+// }
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////
 // Part 2 - AES + MAC
-async function Get_AES_GCM_Key(SharedSecret, sender_name, receiver_name) {
+async function Derive_AES_GCM_Key(SharedSecret, salt, user_1_id, user_2_id) {
     return window.crypto.subtle.deriveKey(
     {
       name: "HKDF",
-      salt: window.crypto.getRandomValues(new Uint8Array(16)),
-      info: new Uint8Array(`CHAT_KEY_${sender_name}_TO_${receiver_name}`),
+      salt: salt,
+      info: new Uint8Array(`CHAT_KEY_USER${user_1_id}_TO_${user_2_id}`),
       hash: "SHA-256",
     },
 
-    keyMaterial,
+    SharedSecret,
+
     { name: "AES-GCM", length: 256 },
     true,
     ["encrypt", "decrypt"],
@@ -365,31 +413,180 @@ async function Get_AES_GCM_Key(SharedSecret, sender_name, receiver_name) {
 
 
 
-async function encrypt(SharedSecret, plainText) {
-  const message = {
-    iv: window.crypto.getRandomValues(new Uint8Array(12)),
-  };
+async function encrypt_messages(plainText, key, IV, additionalData) {
+    try {
+        ciphertext = await window.crypto.subtle.encrypt(
+        {
+            name: "AES-GCM",
+            iv: IV,
+            additionalData: additionalData, 
+            tagLength: 128
+        },
+            key,
+            plainText,
+        );
 
-  const key = await getKey(SharedSecret);
+        return ciphertext;
+    }
 
-  message.ciphertext = await window.crypto.subtle.encrypt(
-    {
-      name: "AES-GCM",
-      iv: message.iv,
-    },
-    key,
-    plainText,
-  );
-
-  return message;
+    catch (error) {
+        console.log(error);
+    }
 }
 
-async function Create_HMAC_Key() {
-    let HMAC = await window.crypto.subtle.generateKey({name: "HMAC", hash: "SHA-256"}, true, ["sign", "verify"]);
-    
-
-    
+async function Derive_HMAC_Key(SharedSecret, salt, user_1_id, user_2_id) {
+    let HMAC_Key = await window.crypto.subtle.deriveKey(
+        {
+        name: "HKDF",
+        salt: salt,
+        info: new Uint8Array(`CHAT_KEY_USER${user_1_id}_TO_${user_2_id}`),
+        hash: "SHA-256",
+        },
+        SharedSecret,
+        {
+            name: "HMAC",
+            hash: "SHA-256"
+        },
+        true,
+        ["sign", "verify"]
+    );
+    return HMAC_Key;
 }
+
+
+function IV_counter(reset) {
+    if (reset == true) {
+        localStorage.setItem("IV_counter", "1");
+        return "1";
+    }
+
+    let counter = localStorage.getItem("IV_counter");
+    if (counter == "" || counter == null) {
+        localStorage.setItem("IV_counter", "1");
+        return "1";
+    }
+    else {
+        counter = parseInt(counter);
+        counter = counter + 1;
+        localStorage.setItem("IV_counter", counter.toString());    // next counter
+        
+        return (counter - 1).toString();
+    }
+}
+
+
+
+async function Make_AES_and_HMAC_Keys(SharedSecret, message) {
+
+
+    let salt = window.crypto.getRandomValues(new Uint8Array(16));
+
+
+    // Part 2 - Create Keys
+    let sharedDK = await crypto.subtle.importKey('raw', SharedSecret, "HKDF", false, ['deriveKey']);
+    let AES_GCM_Key_Depart = await Derive_AES_GCM_Key(sharedDK, salt, my_id, peer_id);
+    let AES_GCM_Key_Arrive = await Derive_AES_GCM_Key(sharedDK, salt, peer_id, my_id);
+    let HMAC_Key_Depart = await Derive_HMAC_Key(sharedDK, salt, my_id, peer_id);
+    let HMAC_Key_Arrive = await Derive_HMAC_Key(sharedDK, salt, peer_id, my_id);
+
+    AES_GCM_Key_Depart_Export = await window.crypto.subtle.exportKey("jwk", AES_GCM_Key_Depart);
+    HMAC_Key_Depart_Export = await window.crypto.subtle.exportKey("jwk", HMAC_Key_Depart);
+    localStorage.setItem("AES_GCM_Key_Depart", JSON.stringify(AES_GCM_Key_Depart_Export));
+    localStorage.setItem("HMAC_Key_Depart", JSON.stringify(HMAC_Key_Depart_Export));
+
+
+
+    // Part 3 - Encrypt messages
+    let iv = IV_counter(false);
+    iv = new TextEncoder().encode(iv.padStart(12, "0"));
+
+    let additionalData = new TextEncoder().encode(`CHAT_MSG_USER${my_id}_TO_${peer_id}`);
+
+    let encrypted_messages = bytesToHexString(await encrypt_messages(message, AES_GCM_Key_Depart, iv, additionalData));
+    iv = await window.crypto.subtle.sign("HMAC", HMAC_Key_Depart, iv);
+
+    Send_Keys_To_Backend("AES-GCM", AES_GCM_Key_Depart_Export, my_id, peer_id);
+    //Send_Keys_To_Backend("AES-GCM", AES_GCM_Key_Depart, peer_id, my_id);
+    Send_Keys_To_Backend("HMAC", HMAC_Key_Depart_Export, my_id, peer_id);
+    //Send_Keys_To_Backend("HMAC", AES_GCM_Key_Depart, peer_id, my_id);
+
+    return {encrypted_messages: encrypted_messages, iv: iv, salt: salt, additionalData: additionalData, key_id: localStorage.getItem("key_id")};
+}
+
+
+
+
+function Send_Keys_To_Backend(key_type, key_content, sender_id, receiver_id) {
+    // Send keys to Backend
+
+    const payload = {
+        key_type: key_type,
+        key_content: key_content,
+        sender_id: sender_id,
+        receiver_id: receiver_id,
+    };
+
+
+
+    fetch(`/Send_Keys_To_Backend`, {
+        method: 'POST', // Specify the method
+        headers: {
+            'Content-Type': 'application/json',
+        },
+
+        body: JSON.stringify(payload),
+    })
+
+    .then(async(response) => {
+        if (!response.ok) {
+            // If the server response is not OK, throw an error
+            throw new Error('Network response was not ok');
+        }
+        return await response.json(); // Parse JSON response from the server
+    })
+    .then(async(data) => {
+        await console.log('Key ID:', data.key_id); // Log success message
+        localStorage.setItem("key_id", data.key_id);  // should encrypt with user pw
+
+    })
+    .catch(error => {
+        console.error('Error sending message:', error); // Log any errors
+    });
+
+
+}
+
+
+
+
+async function decrypt_messages(cryptoKey, cipherText, iv, additionalData) {
+    return await window.crypto.subtle.decrypt(
+        {
+            name: "AES-GCM",
+            iv: iv, 
+            additionalData, additionalData,
+            tagLength: 128
+        },
+        cryptoKey,
+        cipherText
+    );
+}
+
+
+
+async function retrieve_AES_and_HMAC_Key(message_id, key_type) {
+    fetch(`/retrieve_AES_and_HMAC_Key?message_id=${message_id}`)
+        .then(response => response.json())
+            .then(data => {
+                data.key_info.forEach(key_info => {
+                    return {key_id: key_info.key_id, key_content: key_info.key_content};
+                })
+            })
+}
+
+
+
+
 
 // https://security.stackexchange.com/questions/257828/key-management-for-end-to-end-encryption-for-chat-application
 

@@ -71,7 +71,7 @@ def users():
     cur.close()
 
     filtered_users = [[user[0], user[1]] for user in user_data if user[0] != session['user_id']]
-    return {'users': filtered_users}
+    return {'current_user': session['user_id'], 'users': filtered_users}
 
 @app.route('/fetch_messages')
 def fetch_messages():
@@ -127,17 +127,24 @@ def send_message():
     sender_id = session['user_id']
     receiver_id = request.json['receiver_id']
     message_text = request.json['message_text']
+    iv = request.json['iv']
+    salt = request.json['salt']
+    additionalData = request.json['additionalData']
+    key_id = int(request.json['key_id'])
+    
+    key_id -= 1     # AES-GCM instead of HMAC
+    
 
     # Assuming you have a function to save messages
-    save_message(sender_id, receiver_id, message_text)
+    save_message(sender_id, receiver_id, message_text, iv, salt, additionalData, key_id)
     
     return jsonify({'status': 'success', 'message': 'Message sent'}), 200
 
 
 
-def save_message(sender, receiver, message):
+def save_message(sender, receiver, message, iv, salt, additionalData, key_id):
     cur = mysql.connection.cursor()
-    cur.execute("INSERT INTO messages (sender_id, receiver_id, message_text) VALUES (%s, %s, %s)", (sender, receiver, message,))
+    cur.execute("INSERT INTO messages (sender_id, receiver_id, message_text, iv, salt, additionalData, key_id) VALUES (%s, %s, %s, %s, %s, %s, %s)", (sender, receiver, message, iv, salt, additionalData, key_id))
     mysql.connection.commit()
     cur.close()
 
@@ -208,6 +215,7 @@ def ProcessECDHKey():
     return jsonify({'status': 'success', 'message': 'Message sent'}), 200
 
 
+
 @app.route('/retrieve_ECDH_PublicKey', methods=['GET', 'POST'])
 def retrieve_ECDH_PublicKey():
     if 'user_id' not in session:
@@ -224,11 +232,57 @@ def retrieve_ECDH_PublicKey():
     return jsonify({"session_key": ECDH_PublicKey}), 200
 
 
+@app.route('/Send_Keys_To_Backend', methods=['POST'])
+def Send_Keys_To_Backend():
+    if not request.json:
+        abort(400)  # Bad request if the request doesn't contain JSON or lacks 'message_text'
 
+    key_type = request.json['key_type']
+    key_content = request.json['key_content']
+    sender_id = request.json['sender_id']
+    receiver_id = request.json['receiver_id']
+    
+    key_content = str(key_content).replace("\'", "\"")
+    # print("\n\n\n" + key_content)
+    
+    cur = mysql.connection.cursor()
+    cur.execute("INSERT INTO ENCRYPTIONKEY (key_type, key_content, sender_id, receiver_id) VALUES (%s, %s, %s, %s)", (key_type, key_content, sender_id, receiver_id))
+    mysql.connection.commit()
+    
+    cur.execute("SELECT key_id FROM ENCRYPTIONKEY WHERE (key_type = %s AND key_content = %s AND sender_id = %s AND receiver_id = %s)", (key_type, key_content, sender_id, receiver_id))
+    key_id = cur.fetchone()
+    cur.close()
 
+    return jsonify({'status': 'success', 'message': 'Key received', 'key_id': key_id[0]})
+    
+    
+    
+@app.route('/retrieve_AES_and_HMAC_Key', methods=['GET'])
+def retrieve_AES_and_HMAC_Key():
+    if 'user_id' not in session:
+        abort(403)
 
+    message_id = request.args.get('message_id', type=int)
 
-
+    cur = mysql.connection.cursor()
+    cur.execute("SELECT key_id, iv, additionalData FROM messages WHERE message_id = %s", (message_id))
+    Key_Info = cur.fetchone()
+    Key_Info = jsonify(Key_Info)
+    
+    cur.execute("SELECT key_content, sender_id, receiver_id FROM messages WHERE key_id = %s", (Key_Info.key_id))
+    Key_Content = cur.fetchone()
+    
+    Key_Info = Key_Info + Key_Content
+    
+    cur.close()
+    
+    return jsonify({"key_info": Key_Info}), 200
+    
+    
+    
+    
+    
+    
 if __name__ == '__main__':
     app.run(debug=True)
 
